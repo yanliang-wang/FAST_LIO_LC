@@ -1292,6 +1292,23 @@ bool KD_TREE::point_cmp_x(PointType a, PointType b) { return a.x < b.x;}
 bool KD_TREE::point_cmp_y(PointType a, PointType b) { return a.y < b.y;}
 bool KD_TREE::point_cmp_z(PointType a, PointType b) { return a.z < b.z;}
 
+/**
+ * @brief 删除当前所有的点云缓存，根据输入的点云，重新构造ikdtree
+ * @param point_cloud 输入的点云
+ */
+void KD_TREE::reconstruct(PointVector point_cloud){
+    Delete_Storage_Disabled = true;
+    delete_tree_nodes(&Root_Node);
+    PointVector ().swap(PCL_Storage);
+    Rebuild_Logger.clear();           
+
+    if(Root_Node == nullptr){
+        Build(point_cloud);
+    } else {
+        Add_Points(point_cloud, true);
+    }
+}
+
 // Manual heap
 MANUAL_HEAP::MANUAL_HEAP(int max_capacity){
     cap = max_capacity;

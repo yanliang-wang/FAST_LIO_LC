@@ -1,3 +1,16 @@
+/**
+ * @file laserPosegraphOptimization.cpp
+ * @author Yanliang Wang (wyl410922@qq.com)
+ * @brief 
+ * 1. Detect the keyframes
+ * 2. Maintain the Gtsam-based pose graph
+ * 3. Detect the radius-search-based loop closure, and add them to the pose graph
+ * @version 0.1
+ * @date 2022-03-11
+ * 
+ * @copyright Copyright (c) 2022
+ * 
+ */
 #include <fstream>
 #include <math.h>
 #include <vector>
@@ -57,6 +70,9 @@
 
 #include "scancontext/Scancontext.h"
 
+#include <visualization_msgs/Marker.h>
+#include <visualization_msgs/MarkerArray.h>
+
 using namespace gtsam;
 
 using std::cout;
@@ -91,6 +107,11 @@ std::vector<Pose6D> keyframePoses;
 std::vector<Pose6D> keyframePosesUpdated;
 std::vector<double> keyframeTimes;
 int recentIdxUpdated = 0;
+// for loop closure detection
+std::map<int, int> loopIndexContainer; // 记录存在的回环对
+pcl::KdTreeFLANN<pcl::PointXYZ>::Ptr kdtreeHistoryKeyPoses(new pcl::KdTreeFLANN<pcl::PointXYZ>());
+ros::Publisher pubLoopConstraintEdge;
+
 
 gtsam::NonlinearFactorGraph gtSAMgraph;
 bool gtSAMgraphMade = false;
@@ -133,6 +154,23 @@ std::string save_directory;
 std::string pgKITTIformat, pgScansDirectory;
 std::string odomKITTIformat;
 std::fstream pgTimeSaveStream;
+
+// for front_end
+ros::Publisher pubKeyFramesId;
+
+// for loop closure
+double historyKeyframeSearchRadius;
+double historyKeyframeSearchTimeDiff;
+int historyKeyframeSearchNum;
+double loopClosureFrequency;
+int graphUpdateTimes;
+double graphUpdateFrequency;
+double loopNoiseScore;
+double vizmapFrequency;
+double vizPathFrequency;
+double speedFactor;
+ros::Publisher pubLoopScanLocalRegisted;
+double loopFitnessScoreThreshold;
 
 std::string padZeros(int val, int num_digits = 6) {
   std::ostringstream out;
@@ -222,7 +260,7 @@ void initNoises( void )
     odomNoiseVector6 << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4;
     odomNoise = noiseModel::Diagonal::Variances(odomNoiseVector6);
 
-    double loopNoiseScore = 0.5; // constant is ok...
+    // double loopNoiseScore = 0.5; // constant is ok...
     gtsam::Vector robustNoiseVector6(6); // gtsam::Pose3 factor has 6 elements (6D)
     robustNoiseVector6 << loopNoiseScore, loopNoiseScore, loopNoiseScore, loopNoiseScore, loopNoiseScore, loopNoiseScore;
     robustLoopNoise = gtsam::noiseModel::Robust::Create(
@@ -249,7 +287,7 @@ Pose6D getOdom(nav_msgs::Odometry::ConstPtr _odom)
     geometry_msgs::Quaternion quat = _odom->pose.pose.orientation;
     tf::Matrix3x3(tf::Quaternion(quat.x, quat.y, quat.z, quat.w)).getRPY(roll, pitch, yaw);
 
-    return Pose6D{tx, ty, tz, roll, pitch, yaw}; 
+    return Pose6D{tx, ty, tz, roll, pitch, yaw, _odom->header.seq}; 
 } // getOdom
 
 Pose6D diffTransformation(const Pose6D& _p1, const Pose6D& _p2)
@@ -365,12 +403,16 @@ void runISAM2opt(void)
     // called when a variable added 
     isam->update(gtSAMgraph, initialEstimate);
     isam->update();
+    for(int i = graphUpdateTimes; i > 0; --i){
+        isam->update();
+    }
     
     gtSAMgraph.resize(0);
     initialEstimate.clear();
 
     isamCurrentEstimate = isam->calculateEstimate();
     updatePoses();
+    pubPath();  // 每优化一次就输出一次优化后的位姿
 }
 
 pcl::PointCloud<PointType>::Ptr transformPointCloud(pcl::PointCloud<PointType>::Ptr cloudIn, gtsam::Pose3 transformIn)
@@ -404,12 +446,12 @@ void loopFindNearKeyframesCloud( pcl::PointCloud<PointType>::Ptr& nearKeyframes,
     // extract and stacking near keyframes (in global coord)
     nearKeyframes->clear();
     for (int i = -submap_size; i <= submap_size; ++i) {
-        int keyNear = key + i;
+        int keyNear = root_idx + i;
         if (keyNear < 0 || keyNear >= int(keyframeLaserClouds.size()) )
             continue;
 
         mKF.lock(); 
-        *nearKeyframes += * local2global(keyframeLaserClouds[keyNear], keyframePosesUpdated[root_idx]);
+        *nearKeyframes += * local2global(keyframeLaserClouds[keyNear], keyframePosesUpdated[keyNear]);
         mKF.unlock(); 
     }
 
@@ -423,15 +465,64 @@ void loopFindNearKeyframesCloud( pcl::PointCloud<PointType>::Ptr& nearKeyframes,
     *nearKeyframes = *cloud_temp;
 } // loopFindNearKeyframesCloud
 
+/**
+ * 提取key索引的关键帧前后相邻若干帧的关键帧特征点集合，降采样
+*/
+void loopFindNearKeyframes(pcl::PointCloud<PointType>::Ptr& nearKeyframes, const int& key, const int& searchNum)
+{
+    // 提取key索引的关键帧前后相邻若干帧的关键帧特征点集合
+    nearKeyframes->clear();
+    int cloudSize = keyframeLaserClouds.size();
+    for (int i = -searchNum; i <= searchNum; ++i)
+    {
+        int keyNear = key + i;
+        if (keyNear < 0 || keyNear >= cloudSize )
+            continue;
+        // *nearKeyframes += *transformPointCloud(keyframeLaserClouds[keyNear], &copy_cloudKeyPoses6D->points[keyNear]);
+        mKF.lock(); 
+        *nearKeyframes += * local2global(keyframeLaserClouds[keyNear], keyframePosesUpdated[keyNear]);
+        mKF.unlock();
+    }
 
-std::optional<gtsam::Pose3> doICPVirtualRelative( int _loop_kf_idx, int _curr_kf_idx )
+    if (nearKeyframes->empty())
+        return;
+
+    // 降采样
+    pcl::PointCloud<PointType>::Ptr cloud_temp(new pcl::PointCloud<PointType>());
+    downSizeFilterICP.setInputCloud(nearKeyframes);
+    downSizeFilterICP.filter(*cloud_temp);
+    *nearKeyframes = *cloud_temp;
+}
+
+/**
+ * Eigen格式的位姿变换
+*/
+Eigen::Affine3f Pose6dToAffine3f(Pose6D pose)
+{ 
+    return pcl::getTransformation(pose.x, pose.y, pose.z, pose.roll, pose.pitch, pose.yaw);
+}
+
+/**
+ * 位姿格式变换
+*/
+gtsam::Pose3 Pose6dTogtsamPose3(Pose6D pose)
+{
+    return gtsam::Pose3(gtsam::Rot3::RzRyRx(double(pose.roll), double(pose.pitch), double(pose.yaw)),
+                                gtsam::Point3(double(pose.x),    double(pose.y),     double(pose.z)));
+}
+
+gtsam::Pose3 doICPVirtualRelative( int _loop_kf_idx, int _curr_kf_idx )
 {
     // parse pointclouds
-    int historyKeyframeSearchNum = 25; // enough. ex. [-25, 25] covers submap length of 50x1 = 50m if every kf gap is 1m
+    // int historyKeyframeSearchNum = 25; // enough. ex. [-25, 25] covers submap length of 50x1 = 50m if every kf gap is 1m
     pcl::PointCloud<PointType>::Ptr cureKeyframeCloud(new pcl::PointCloud<PointType>());
     pcl::PointCloud<PointType>::Ptr targetKeyframeCloud(new pcl::PointCloud<PointType>());
-    loopFindNearKeyframesCloud(cureKeyframeCloud, _curr_kf_idx, 0, _loop_kf_idx); // use same root of loop kf idx 
-    loopFindNearKeyframesCloud(targetKeyframeCloud, _loop_kf_idx, historyKeyframeSearchNum, _loop_kf_idx); 
+    // loopFindNearKeyframesCloud(cureKeyframeCloud, _curr_kf_idx, 0, _loop_kf_idx); // use same root of loop kf idx 
+    // loopFindNearKeyframesCloud(targetKeyframeCloud, _loop_kf_idx, historyKeyframeSearchNum, _loop_kf_idx); 
+    // 提取当前关键帧特征点集合，降采样
+    loopFindNearKeyframes(cureKeyframeCloud, _curr_kf_idx, 0);
+    // 提取闭环匹配关键帧前后相邻若干帧的关键帧特征点集合，降采样
+    loopFindNearKeyframes(targetKeyframeCloud, _loop_kf_idx, historyKeyframeSearchNum);
 
     // loop verification 
     sensor_msgs::PointCloud2 cureKeyframeCloudMsg;
@@ -457,11 +548,16 @@ std::optional<gtsam::Pose3> doICPVirtualRelative( int _loop_kf_idx, int _curr_kf
     icp.setInputTarget(targetKeyframeCloud);
     pcl::PointCloud<PointType>::Ptr unused_result(new pcl::PointCloud<PointType>());
     icp.align(*unused_result);
- 
-    float loopFitnessScoreThreshold = 0.3; // user parameter but fixed low value is safe. 
+
+    sensor_msgs::PointCloud2 cureKeyframeCloudRegMsg;
+    pcl::toROSMsg(*unused_result, cureKeyframeCloudRegMsg);
+    cureKeyframeCloudRegMsg.header.frame_id = "camera_init";
+    pubLoopScanLocalRegisted.publish(cureKeyframeCloudRegMsg);
+    
+    // float loopFitnessScoreThreshold = 0.3; // user parameter but fixed low value is safe. 
     if (icp.hasConverged() == false || icp.getFitnessScore() > loopFitnessScoreThreshold) {
         std::cout << "[SC loop] ICP fitness test failed (" << icp.getFitnessScore() << " > " << loopFitnessScoreThreshold << "). Reject this SC loop." << std::endl;
-        return std::nullopt;
+        return gtsam::Pose3::identity();
     } else {
         std::cout << "[SC loop] ICP fitness test passed (" << icp.getFitnessScore() << " < " << loopFitnessScoreThreshold << "). Add this SC loop." << std::endl;
     }
@@ -470,9 +566,15 @@ std::optional<gtsam::Pose3> doICPVirtualRelative( int _loop_kf_idx, int _curr_kf
     float x, y, z, roll, pitch, yaw;
     Eigen::Affine3f correctionLidarFrame;
     correctionLidarFrame = icp.getFinalTransformation();
-    pcl::getTranslationAndEulerAngles (correctionLidarFrame, x, y, z, roll, pitch, yaw);
+
+    Eigen::Affine3f tWrong = Pose6dToAffine3f(keyframePosesUpdated[_curr_kf_idx]);
+
+    // 闭环优化后当前帧位姿
+    Eigen::Affine3f tCorrect = correctionLidarFrame * tWrong;
+    pcl::getTranslationAndEulerAngles(tCorrect, x, y, z, roll, pitch, yaw);
     gtsam::Pose3 poseFrom = Pose3(Rot3::RzRyRx(roll, pitch, yaw), Point3(x, y, z));
-    gtsam::Pose3 poseTo = Pose3(Rot3::RzRyRx(0.0, 0.0, 0.0), Point3(0.0, 0.0, 0.0));
+    // 闭环匹配帧的位姿
+    gtsam::Pose3 poseTo =  Pose6dTogtsamPose3(keyframePosesUpdated[_loop_kf_idx]);
 
     return poseFrom.between(poseTo);
 } // doICPVirtualRelative
@@ -498,7 +600,6 @@ void process_pg()
             // Time equal check
             timeLaserOdometry = odometryBuf.front()->header.stamp.toSec();
             timeLaser = fullResBuf.front()->header.stamp.toSec();
-            // TODO
 
             laserCloudFullRes->clear();
             pcl::PointCloud<PointType>::Ptr thisKeyFrame(new pcl::PointCloud<PointType>());
@@ -535,6 +636,7 @@ void process_pg()
             translationAccumulated += delta_translation;
             rotaionAccumulated += (dtf.roll + dtf.pitch + dtf.yaw); // sum just naive approach.  
 
+            // 关键帧选择
             if( translationAccumulated > keyframeMeterGap || rotaionAccumulated > keyframeRadGap ) {
                 isNowKeyFrame = true;
                 translationAccumulated = 0.0; // reset 
@@ -563,6 +665,13 @@ void process_pg()
             mKF.lock(); 
             keyframeLaserClouds.push_back(thisKeyFrameDS);
             keyframePoses.push_back(pose_curr);
+            {
+                // 发布关键帧id
+                std_msgs::Header keyFrameHeader;
+                keyFrameHeader.seq = pose_curr.seq;
+                keyFrameHeader.stamp = ros::Time::now();
+                pubKeyFramesId.publish(keyFrameHeader);
+            }
             keyframePosesUpdated.push_back(pose_curr); // init
             keyframeTimes.push_back(timeLaserOdometry);
 
@@ -653,15 +762,141 @@ void performSCLoopClosure(void)
     }
 } // performSCLoopClosure
 
+pcl::PointCloud<pcl::PointXYZ>::Ptr vector2pc(const std::vector<Pose6D> vectorPose6d){
+    pcl::PointCloud<pcl::PointXYZ>::Ptr res( new pcl::PointCloud<pcl::PointXYZ> ) ;
+    for( auto p : vectorPose6d){
+        res->points.emplace_back(p.x, p.y, p.z);
+    }
+    return res;
+}
+
+/**
+ * 在历史关键帧中查找与当前关键帧距离最近的关键帧集合，选择时间相隔较远的一帧作为候选闭环帧
+*/
+bool detectLoopClosureDistance(int *loopKeyCur, int *loopKeyPre)
+{
+    // 当前关键帧
+    // int loopKeyCur = keyframePoses.size() - 1;
+    // int loopKeyPre = -1;
+
+    // 当前帧已经添加过闭环对应关系，不再继续添加
+    auto it = loopIndexContainer.find(*loopKeyCur);
+    if (it != loopIndexContainer.end())
+        return false;
+
+    // 在历史关键帧中查找与当前关键帧距离最近的关键帧集合
+    pcl::PointCloud<pcl::PointXYZ>::Ptr copy_cloudKeyPoses3D = vector2pc(keyframePoses);
+    std::vector<int> pointSearchIndLoop;
+    std::vector<float> pointSearchSqDisLoop;
+    kdtreeHistoryKeyPoses->setInputCloud(copy_cloudKeyPoses3D);
+    kdtreeHistoryKeyPoses->radiusSearch(copy_cloudKeyPoses3D->back(), historyKeyframeSearchRadius, pointSearchIndLoop, pointSearchSqDisLoop, 0);
+    
+    // 在候选关键帧集合中，找到与当前帧时间相隔较远的帧，设为候选匹配帧
+    for(int i = 0; i < pointSearchIndLoop.size(); ++i)
+    {
+        int id = pointSearchIndLoop[i];
+        if ( abs( keyframeTimes[id] - keyframeTimes[*loopKeyCur] ) > historyKeyframeSearchTimeDiff )
+        {
+            *loopKeyPre = id;
+            break;
+        }
+    }
+
+    if (*loopKeyPre == -1 || *loopKeyCur == *loopKeyPre)
+        return false;
+
+    // *latestID = loopKeyCur;
+    // *closestID = loopKeyPre;
+
+    return true;
+}
+
+void performRSLoopClosure(void)
+{
+    if( keyframePoses.empty() ) // 如果历史关键帧为空
+        return;
+
+    // 当前关键帧索引，候选闭环匹配帧索引
+    int loopKeyCur = keyframePoses.size() - 1;
+    int loopKeyPre = -1;
+    if ( detectLoopClosureDistance(&loopKeyCur, &loopKeyPre) ){
+        cout << "Loop detected! - between " << loopKeyPre << " and " << loopKeyCur << "" << endl;
+        mBuf.lock();
+        scLoopICPBuf.push(std::pair<int, int>(loopKeyPre, loopKeyCur));
+        loopIndexContainer[loopKeyCur] = loopKeyPre ;
+        // addding actual 6D constraints in the other thread, icp_calculation.
+        mBuf.unlock();
+    } else 
+        return;
+} // performRSLoopClosure
+
+/**
+ * rviz展示闭环边
+*/
+void visualizeLoopClosure()
+{
+    if (loopIndexContainer.empty())
+        return;
+    
+    visualization_msgs::MarkerArray markerArray;
+    // 闭环顶点
+    visualization_msgs::Marker markerNode;
+    markerNode.header.frame_id = "camera_init"; // camera_init
+    markerNode.header.stamp = ros::Time().fromSec( keyframeTimes.back() );
+    markerNode.action = visualization_msgs::Marker::ADD;
+    markerNode.type = visualization_msgs::Marker::SPHERE_LIST;
+    markerNode.ns = "loop_nodes";
+    markerNode.id = 0;
+    markerNode.pose.orientation.w = 1;
+    markerNode.scale.x = 0.3; markerNode.scale.y = 0.3; markerNode.scale.z = 0.3; 
+    markerNode.color.r = 0; markerNode.color.g = 0.8; markerNode.color.b = 1;
+    markerNode.color.a = 1;
+    // 闭环边
+    visualization_msgs::Marker markerEdge;
+    markerEdge.header.frame_id = "camera_init";
+    markerEdge.header.stamp = ros::Time().fromSec( keyframeTimes.back() );
+    markerEdge.action = visualization_msgs::Marker::ADD;
+    markerEdge.type = visualization_msgs::Marker::LINE_LIST;
+    markerEdge.ns = "loop_edges";
+    markerEdge.id = 1;
+    markerEdge.pose.orientation.w = 1;
+    markerEdge.scale.x = 0.1;
+    markerEdge.color.r = 0.9; markerEdge.color.g = 0.9; markerEdge.color.b = 0;
+    markerEdge.color.a = 1;
+
+    // 遍历闭环
+    for (auto it = loopIndexContainer.begin(); it != loopIndexContainer.end(); ++it)
+    {
+        int key_cur = it->first;
+        int key_pre = it->second;
+        geometry_msgs::Point p;
+        p.x = keyframePosesUpdated[key_cur].x;
+        p.y = keyframePosesUpdated[key_cur].y;
+        p.z = keyframePosesUpdated[key_cur].z;
+        markerNode.points.push_back(p);
+        markerEdge.points.push_back(p);
+        p.x = keyframePosesUpdated[key_pre].x;
+        p.y = keyframePosesUpdated[key_pre].y;
+        p.z = keyframePosesUpdated[key_pre].z;
+        markerNode.points.push_back(p);
+        markerEdge.points.push_back(p);
+    }
+
+    markerArray.markers.push_back(markerNode);
+    markerArray.markers.push_back(markerEdge);
+    pubLoopConstraintEdge.publish(markerArray);
+}
+
 void process_lcd(void)
 {
-    float loopClosureFrequency = 1.0; // can change 
+    // float loopClosureFrequency = 3.0; // can change 
     ros::Rate rate(loopClosureFrequency);
     while (ros::ok())
     {
         rate.sleep();
-        performSCLoopClosure();
-        // performRSLoopClosure(); // TODO
+        // performSCLoopClosure();
+        performRSLoopClosure(); // TODO
+        visualizeLoopClosure();
     }
 } // process_lcd
 
@@ -682,11 +917,12 @@ void process_icp(void)
 
             const int prev_node_idx = loop_idx_pair.first;
             const int curr_node_idx = loop_idx_pair.second;
-            auto relative_pose_optional = doICPVirtualRelative(prev_node_idx, curr_node_idx);
-            if(relative_pose_optional) {
-                gtsam::Pose3 relative_pose = relative_pose_optional.value();
+            auto relative_pose = doICPVirtualRelative(prev_node_idx, curr_node_idx);
+            // if( !gtsam::Pose3::equals(relative_pose, gtsam::Pose3::identity()) ) {
+            if( !relative_pose.equals( gtsam::Pose3::identity() )) {
+                // gtsam::Pose3 relative_pose = relative_pose_optional.value();
                 mtxPosegraph.lock();
-                gtSAMgraph.add(gtsam::BetweenFactor<gtsam::Pose3>(prev_node_idx, curr_node_idx, relative_pose, robustLoopNoise));
+                gtSAMgraph.add(gtsam::BetweenFactor<gtsam::Pose3>(curr_node_idx, prev_node_idx, relative_pose, robustLoopNoise));
                 // runISAM2opt();
                 mtxPosegraph.unlock();
             } 
@@ -700,7 +936,7 @@ void process_icp(void)
 
 void process_viz_path(void)
 {
-    float hz = 10.0; 
+    float hz = vizPathFrequency; 
     ros::Rate rate(hz);
     while (ros::ok()) {
         rate.sleep();
@@ -712,14 +948,14 @@ void process_viz_path(void)
 
 void process_isam(void)
 {
-    float hz = 1; 
+    float hz = graphUpdateFrequency; 
     ros::Rate rate(hz);
     while (ros::ok()) {
         rate.sleep();
         if( gtSAMgraphMade ) {
             mtxPosegraph.lock();
             runISAM2opt();
-            cout << "running isam2 optimization ..." << endl;
+            // cout << "running isam2 optimization ..." << endl;
             mtxPosegraph.unlock();
 
             saveOptimizedVerticesKITTIformat(isamCurrentEstimate, pgKITTIformat); // pose
@@ -730,7 +966,7 @@ void process_isam(void)
 
 void pubMap(void)
 {
-    int SKIP_FRAMES = 2; // sparse map visulalization to save computations 
+    int SKIP_FRAMES = 1; // sparse map visulalization to save computations 
     int counter = 0;
 
     laserCloudMapPGO->clear();
@@ -756,7 +992,7 @@ void pubMap(void)
 
 void process_viz_map(void)
 {
-    float vizmapFrequency = 0.1; // 0.1 means run onces every 10s
+    // float vizmapFrequency = 0.1; // 0.1 means run onces every 10s
     ros::Rate rate(vizmapFrequency);
     while (ros::ok()) {
         rate.sleep();
@@ -788,6 +1024,29 @@ int main(int argc, char **argv)
 	nh.param<double>("sc_dist_thres", scDistThres, 0.2);  
 	nh.param<double>("sc_max_radius", scMaximumRadius, 80.0); // 80 is recommended for outdoor, and lower (ex, 20, 40) values are recommended for indoor 
 
+    // for loop closure detection
+	nh.param<double>("historyKeyframeSearchRadius", historyKeyframeSearchRadius, 10.0);  
+	nh.param<double>("historyKeyframeSearchTimeDiff", historyKeyframeSearchTimeDiff, 30.0);  
+	nh.param<int>("historyKeyframeSearchNum", historyKeyframeSearchNum, 25);  
+	nh.param<double>("loopNoiseScore", loopNoiseScore, 0.5);  
+	nh.param<int>("graphUpdateTimes", graphUpdateTimes, 2);  
+	nh.param<double>("loopFitnessScoreThreshold", loopFitnessScoreThreshold, 0.3);  
+
+	nh.param<double>("speedFactor", speedFactor, 1);  
+    {
+        nh.param<double>("loopClosureFrequency", loopClosureFrequency, 2);  
+        loopClosureFrequency *= speedFactor;
+        nh.param<double>("graphUpdateFrequency", graphUpdateFrequency, 1.0);  
+        graphUpdateFrequency *= speedFactor;
+        nh.param<double>("vizmapFrequency", vizmapFrequency, 0.1);  
+        vizmapFrequency *= speedFactor;
+        nh.param<double>("vizPathFrequency", vizPathFrequency, 10);  
+        vizPathFrequency *= speedFactor;
+        
+    }
+
+    
+
     ISAM2Params parameters;
     parameters.relinearizeThreshold = 0.01;
     parameters.relinearizeSkip = 1;
@@ -811,6 +1070,14 @@ int main(int argc, char **argv)
 
 	pubOdomAftPGO = nh.advertise<nav_msgs::Odometry>("/aft_pgo_odom", 100);
 	pubOdomRepubVerifier = nh.advertise<nav_msgs::Odometry>("/repub_odom", 100);
+
+    // for front-end
+    pubKeyFramesId = nh.advertise<std_msgs::Header>("/key_frames_ids", 10);
+
+    // for loop closure
+    pubLoopConstraintEdge = nh.advertise<visualization_msgs::MarkerArray>("/loop_closure_constraints", 1);
+	pubLoopScanLocalRegisted = nh.advertise<sensor_msgs::PointCloud2>("/loop_scan_local_registed", 100);
+
 	pubPathAftPGO = nh.advertise<nav_msgs::Path>("/aft_pgo_path", 100);
 	pubMapAftPGO = nh.advertise<sensor_msgs::PointCloud2>("/aft_pgo_map", 100);
 
@@ -823,7 +1090,7 @@ int main(int argc, char **argv)
 	std::thread isam_update {process_isam}; // if you want to call less isam2 run (for saving redundant computations and no real-time visulization is required), uncommment this and comment all the above runisam2opt when node is added. 
 
 	std::thread viz_map {process_viz_map}; // visualization - map (low frequency because it is heavy)
-	std::thread viz_path {process_viz_path}; // visualization - path (high frequency)
+	//std::thread viz_path {process_viz_path}; // visualization - path (high frequency)
 
  	ros::spin();
 

@@ -59,4 +59,5 @@ struct Pose6D {
   double roll;
   double pitch;
   double yaw;
+  uint32_t seq;
 };

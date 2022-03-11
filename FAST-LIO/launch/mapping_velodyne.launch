@@ -3,22 +3,33 @@
 
     <arg name="rviz" default="true" />
 
-    <rosparam command="load" file="$(find fast_lio)/config/velodyne.yaml" />
+    <rosparam command="load" file="$(find fast_lio)/config/velodyne16.yaml" />
 
+    <!-- 调参说明：  -->
+    <!-- point_filter_num，和filter_size_surf是滤波参数，越小前端效果越好，但运行越慢 -->
     <param name="feature_extract_enable" type="bool" value="0"/>
     <param name="point_filter_num" type="int" value="4"/>
     <param name="max_iteration" type="int" value="3" />
     <param name="scan_publish_enable" type="bool" value="1" />
 	  <param name="dense_publish_enable" type="bool" value="1" />
-    <param name="filter_size_surf" type="double" value="0.5" />
-    <param name="filter_size_map" type="double" value="0.5" />
+    <param name="filter_size_surf" type="double" value="0.5" />   <!-- 对当前点云的filter -->
+    <param name="filter_size_map" type="double" value="0.2" />    <!-- 对地图的filter -->
     <param name="cube_side_length" type="double" value="1000" />
     <param name="runtime_pos_log_enable" type="bool" value="0" />
     <param name="pcd_save_enable" type="bool" value="0" />
+
+    <!-- visualization -->
+    <param name="visulize_map" value="true"/>
+
+    <!--optimization  -->
+    <param name="recontructKdTree" value="true"/> <!-- 打开更新ikdtree -->
+    <param name="updateState" value="true"/>   <!-- 打开更新状态 -->
+    <param name="updateFrequency" value="30"/> <!-- 每接受updateFrequency个点云，更新一次， 不能太大-->
+    
     <node pkg="fast_lio" type="fastlio_mapping" name="laserMapping" output="screen" /> 
 
     <group if="$(arg rviz)">
-    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find fast_lio)/rviz_cfg/loam_livox.rviz" />
+    <node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz_fast_lio" args="-d $(find fast_lio)/rviz_cfg/loam_livox.rviz" />
     </group>
 
 </launch>

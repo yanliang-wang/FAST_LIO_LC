@@ -180,6 +180,7 @@ public:
     int Delete_Point_Boxes(vector<BoxPointType> & BoxPoints);
     void flatten(KD_TREE_NODE * root, PointVector &Storage, delete_point_storage_set storage_type);
     void acquire_removed_points(PointVector & removed_points);
+    void reconstruct(PointVector point_cloud);
     BoxPointType tree_range();
     PointVector PCL_Storage;     
     KD_TREE_NODE * Root_Node = nullptr;

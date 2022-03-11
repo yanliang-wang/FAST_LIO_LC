@@ -21,6 +21,16 @@
     <!-- <param name="sc_max_radius" type="double" value="40.0"/> 20 or 40 for indoor -->
     <param name="sc_max_radius" type="double" value="80.0"/> <!-- for outdoor -->
 
+    <!-- loop closure -->
+    <param name="historyKeyframeSearchRadius" value="50.0"/>
+    <param name="historyKeyframeSearchTimeDiff" value=" 100.0"/>
+    <param name="historyKeyframeSearchNum" value="25"/>
+    <param name="loopClosureFrequency" value="4.0"/>
+    <param name="graphUpdateFrequency" value="4.0"/>
+    <param name="graphUpdateTimes" value="2"/> <!-- 每次更新，ism->update的测试 -->
+    <param name="loopNoiseScore" value="0.02"/>
+    <param name="vizmapFrequency" value="1"/>
+
     <!-- for MulRan -->
     <param name="lidar_type" type="string" value="OS1-64"/>
 
