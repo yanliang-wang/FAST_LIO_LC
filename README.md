@@ -51,7 +51,7 @@ rosbag play  T3F2-2021-08-02-15-00-12.bag  -r 2
 
 ## 4. Example results
 
-video: [Youtube link]() , [Bilibili link]()
+video: [Youtube link](https://youtu.be/W5HYYPYBrn8) , [Bilibili link](https://www.bilibili.com/video/BV1sT4y1D7DC/)
 
 ![example_results](doc/fast-lio-lc-output.gif)
 
