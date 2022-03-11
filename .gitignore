@@ -1,0 +1,9 @@
+build
+FAST-LIO/Log/*.png
+FAST-LIO/Log/*.txt
+FAST-LIO/Log/*.csv
+FAST-LIO/Log/*.pdf
+.vscode/c_cpp_properties.json
+.vscode/settings.json
+PCD/*.pcd
+*.pyc
