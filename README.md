@@ -1,57 +1,62 @@
-# FAST_LIO_SLAM
+# FAST_LIO_LC
 
-## News
--  ``Aug 2021``: The Livox-lidar tests and corresponding launch files will be uploaded soon. Currenty only Ouster lidar tutorial videos had been made. 
+The **tight** integration of [FAST-LIO](https://github.com/hku-mars/FAST_LIO) with Radius-Search-based loop closure module.
 
-## What is FAST_LIO_SLAM?
-Integration of 
-1. [FAST-LIO2](https://github.com/hku-mars/FAST_LIO) (Odometry): A computationally efficient and robust LiDAR-inertial odometry (LIO) package
-2. [SC-PGO](https://github.com/gisbi-kim/SC-A-LOAM) (Loop detection and Pose-graph Optimization): [Scan Context](https://github.com/irapkaist/scancontext)-based Loop detection and GTSAM-based Pose-graph optimization
+**FAST-LIO** (Fast LiDAR-Inertial Odometry) is a computationally efficient and robust LiDAR-inertial odometry package. It fuses LiDAR feature points with IMU data using a tightly-coupled iterated extended Kalman filter. But it doesn't have a loop closure module to eliminate the accumulated drift.
 
-## Features
-- An easy-to-use plug-and-play LiDAR SLAM 
-    - FAST-LIO2 and SC-PGO run separately (see below How to use? tab).
-    - SC-PGO takes odometry and lidar point cloud topics from the FAST-LIO2 node. 
-    - Finally, an optimized map is made within the SC-PGO node. 
+Therefore, this project implements the pose graph optimization with a radius-search-based loop closure module which refers to [FAST_LIO_SLAM](https://github.com/gisbi-kim/FAST_LIO_SLAM). And the pose and map in the iterated extended Kalman filter of FAST-LIO will be updated according to the optimization which is a key difference with [FAST_LIO_SLAM](https://github.com/gisbi-kim/FAST_LIO_SLAM).
 
-## How to use?
-- The below commands and the launch files are made for playing the [MulRan dataset](https://sites.google.com/view/mulran-pr/home), but applicable for livox lidars in the same way (you could easily make your own launch files).
-```
-    # terminal 1: run FAST-LIO2 
-    mkdir -p ~/catkin_fastlio_slam/src
-    cd ~/catkin_fastlio_slam/src
-    git clone https://github.com/gisbi-kim/FAST_LIO_SLAM.git
-    git clone https://github.com/Livox-SDK/livox_ros_driver
-    cd .. 
-    catkin_make
-    source devel/setup.bash
-    roslaunch fast_lio mapping_ouster64_mulran.launch # setting for MulRan dataset 
+- [FAST_LIO_LC](#fast_lio_lc)
+  - [1. Prerequisites](#1-prerequisites)
+  - [2. Build](#2-build)
+  - [3. Quick test](#3-quick-test)
+    - [3.1 For Velodyne 16](#31-for-velodyne-16)
+  - [4. Example results](#4-example-results)
+  - [Acknowledgements](#acknowledgements)
 
-    # open the other terminal tab: run SC-PGO
-    cd ~/catkin_fastlio_slam
-    source devel/setup.bash
-    roslaunch aloam_velodyne fastlio_ouster64.launch # setting for MulRan dataset 
+## 1. Prerequisites
 
-    # open the other terminal tab
-    # run file_player_mulran (for the details, refer here https://github.com/irapkaist/file_player_mulran)
+- Ubuntu 18.04 and ROS Melodic
+- PCL >= 1.8 (default for Ubuntu 18.04)
+- Eigen >= 3.3.4 (default for Ubuntu 18.04)
+- GTSAM >= 4.0.0(tested on 4.0.0-alpha2)
+
+## 2. Build
+
+```bash
+cd YOUR_WORKSPACE/src
+git clone https://github.com/yanliang-wang/FAST_LIO_LC.git
+cd ..
+catkin_make
 ```
 
-## Utility
-- We support keyframe scan saver (as in .pcd) and provide a script reconstructs a point cloud map by merging the saved scans using the optimized poses. See [here](https://github.com/gisbi-kim/FAST_LIO_SLAM/blob/bf975560741c425f71811c864af5d35aa880c797/SC-PGO/utils/python/makeMergedMap.py#L7).
+## 3. Quick test
 
-## Example results 
-- [Tutorial video 1](https://youtu.be/nu8j4yaBMnw) (using KAIST 03 sequence of [MulRan dataset](https://sites.google.com/view/mulran-pr/dataset))
-    - Example result captures 
-        <p align="center"><img src="docs/kaist03.png" width=700></p>
-    - [download the KAIST03 pcd map](https://www.dropbox.com/s/w599ozdg7h6215q/KAIST03.pcd?dl=0) made by FAST-LIO-SLAM, 500MB
-    
-- [Example Video 2](https://youtu.be/94mC05PesvQ) (Riverside 02 sequence of [MulRan dataset](https://sites.google.com/view/mulran-pr/dataset))
-    - Example result captures
-        <p align="center"><img src="docs/riverside02.png" width=700></p>
-    -  [download the Riverisde02 pcd map](https://www.dropbox.com/s/1aolth7ry4odxo4/Riverside02.pcd?dl=0) made by FAST-LIO-SLAM, 400MB
+### 3.1 For Velodyne 16
+
+You can test this project with [our data](https://drive.google.com/file/d/1NGTN3aULoTMp3raF75LwMu-OUtzUx-zX/view?usp=sharing) which includes `/velodyne_points`(10Hz) and `/imu/data`(400Hz).
+
+```bash
+roslaunch fast_lio mapping_velodyne.launch
+roslaunch aloam_velodyne fastlio_velodyne_VLP_16.launch
+rosbag play  T3F2-2021-08-02-15-00-12.bag  -r 2
+```
+
+> If you want to test the original FAST LIO (i.e. without the loop closure module), you can set `lc_enable` in the `mapping_velodyne.launch` to `false` and run following commands.
+>
+> ```bash
+> roslaunch fast_lio mapping_velodyne.launch
+> rosbag play  T3F2-2021-08-02-15-00-12.bag  -r 2
+> ```
+
+## 4. Example results
+
+video: [Youtube link]() , [Bilibili link]()
+
+![example_results](doc/fast-lio-lc-output.gif)
 
 ## Acknowledgements 
-- Thanks for [FAST_LIO](https://github.com/hku-mars/FAST_LIO) authors.
+In this project, the LIO module refers to [FAST-LIO](https://github.com/hku-mars/FAST_LIO) and the pose graph optimization refers to [FAST_LIO_SLAM](https://github.com/gisbi-kim/FAST_LIO_SLAM).
 
-
+Many thanks for their work.
 

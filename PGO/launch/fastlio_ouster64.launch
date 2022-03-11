@@ -1,0 +1,54 @@
+<launch>
+
+    <param name="scan_line" type="int" value="64" />
+
+    <!-- if 1, do mapping 10 Hz, if 2, do mapping 5 Hz. Suggest to use 1, it will adjust frequence automaticlly -->
+    <!-- <param name="mapping_skip_frame" type="int" value="1" /> -->
+
+    <!-- remove too closed points -->
+    <param name="minimum_range" type="double" value="0.5"/>
+
+    <param name="mapping_line_resolution" type="double" value="0.4"/> <!-- A-LOAM -->
+    <param name="mapping_plane_resolution" type="double" value="0.8"/> <!-- A-LOAM -->
+
+    <param name="mapviz_filter_size" type="double" value="0.05"/>
+
+    <!-- SC-A-LOAM -->
+    <param name="keyframe_meter_gap" type="double" value="0.5"/>
+
+    <!-- Scan Context -->
+    <param name="sc_dist_thres" type="double" value="0.3"/> <!-- SC-A-LOAM, if want no outliers, use 0.1-0.15 -->
+    <!-- <param name="sc_max_radius" type="double" value="40.0"/> 20 or 40 for indoor -->
+    <param name="sc_max_radius" type="double" value="80.0"/> <!-- for outdoor -->
+
+    <!-- loop closure -->
+    <param name="historyKeyframeSearchRadius" value="50.0"/>
+    <param name="historyKeyframeSearchTimeDiff" value=" 100.0"/>
+    <param name="historyKeyframeSearchNum" value="25"/>
+    <param name="loopClosureFrequency" value="4.0"/>
+    <param name="graphUpdateFrequency" value="4.0"/>
+    <param name="graphUpdateTimes" value="2"/> <!-- 每次更新，ism->update的测试 -->
+    <param name="loopNoiseScore" value="0.02"/>
+    <param name="vizmapFrequency" value="1"/>
+
+    <!-- for MulRan -->
+    <param name="lidar_type" type="string" value="OS1-64"/>
+
+    <!-- input from FASTLIO2 -->
+    <remap from="/aft_mapped_to_init" to="/Odometry"/>
+    <remap from="/velodyne_cloud_registered_local" to="/cloud_registered_body"/>
+    <remap from="/cloud_for_scancontext" to="/cloud_registered_lidar"/>   <!-- because ScanContext requires lidar-ego-centric coordinate for the better performance -->
+
+    <!-- utils -->
+    <param name="save_directory" type="string" value="$(env HOME)/Desktop/catkin_fastlio_slam/data/"/>  <!-- CHANGE THIS and end with / -->
+
+    <!-- nodes -->
+    <node pkg="aloam_velodyne" type="alaserPGO" name="alaserPGO" output="screen" /> <!-- Scan Context-based PGO -->
+
+    <!-- visulaization -->
+    <arg name="rvizscpgo" default="true" />
+    <group if="$(arg rvizscpgo)">
+        <node launch-prefix="nice" pkg="rviz" type="rviz" name="rvizscpgo" args="-d $(find aloam_velodyne)/rviz_cfg/aloam_velodyne.rviz" />
+    </group>
+
+</launch>

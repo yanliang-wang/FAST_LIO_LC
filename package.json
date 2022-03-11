@@ -1,0 +1,27 @@
+{
+  "name": "FAST_LIO_LC",
+  "version": "0.0.1",
+  "description": "## News -  ``Aug 2021``: The Livox-lidar tests and corresponding launch files will be uploaded soon. Currenty only Ouster lidar tutorial videos had been made.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s -r 0 -u",
+    "release": "release-it --npm.skipChecks --no-git.requireCleanWorkingDir --no-publish --no-git.push --no-git.commit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yanliang-wang/FAST_LIO_LC.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/yanliang-wang/FAST_LIO_LC/issues"
+  },
+  "homepage": "https://github.com/yanliang-wang/FAST_LIO_LC#readme",
+  "config": {
+    "ghooks": {
+      "commit-msg": "validate-commit-msg"
+    }
+  }
+}

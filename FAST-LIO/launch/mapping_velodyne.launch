@@ -1,6 +1,7 @@
 <launch>
   <!-- Launch file for velodyne16 VLP-16 LiDAR -->
 
+    <arg name="lc_enable" default="true"/>
     <arg name="rviz" default="true" />
 
     <rosparam command="load" file="$(find fast_lio)/config/velodyne16.yaml" />
@@ -22,8 +23,8 @@
     <param name="visulize_map" value="true"/>
 
     <!--optimization  -->
-    <param name="recontructKdTree" value="true"/> <!-- 打开更新ikdtree -->
-    <param name="updateState" value="true"/>   <!-- 打开更新状态 -->
+    <param name="recontructKdTree" value="$(arg lc_enable)"/> <!-- 打开更新ikdtree -->
+    <param name="updateState" value="$(arg lc_enable)"/>   <!-- 打开更新状态 -->
     <param name="updateFrequency" value="30"/> <!-- 每接受updateFrequency个点云，更新一次， 不能太大-->
     
     <node pkg="fast_lio" type="fastlio_mapping" name="laserMapping" output="screen" /> 
