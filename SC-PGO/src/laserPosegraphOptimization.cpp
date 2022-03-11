@@ -34,7 +34,7 @@
 #include <nav_msgs/Path.h>
 #include <geometry_msgs/PoseStamped.h>
 
-#include <eigen3/Eigen/Dense>
+#include <Eigen/Dense>
 
 #include <ceres/ceres.h>
 

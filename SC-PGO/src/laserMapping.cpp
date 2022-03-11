@@ -50,7 +50,7 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <tf/transform_datatypes.h>
 #include <tf/transform_broadcaster.h>
-#include <eigen3/Eigen/Dense>
+#include <Eigen/Dense>
 #include <ceres/ceres.h>
 #include <mutex>
 #include <queue>
