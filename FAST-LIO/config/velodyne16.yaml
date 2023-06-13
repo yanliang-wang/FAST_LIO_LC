@@ -24,5 +24,5 @@ mapping:
 
 publish:     
     scan_publish_en:  true       # 'false' will close all the point cloud output
-    dense_publish_en: ture       # false will low down the points number in a global-frame point clouds scan.
+    dense_publish_en: true       # false will low down the points number in a global-frame point clouds scan.
     scan_bodyframe_pub_en: true  # output the point cloud scans in IMU-body-frame
